@@ -34,6 +34,7 @@ def labelEncoding(df, colList):
     '''
     for col in colList:
         df.loc[df[col].notnull(),col] = LabelEncoder().fit_transform(df.loc[df[col].notnull(),col])
+        df[col] = df[col].astype(float)
     return df
 
 # 缩放字段至0-1

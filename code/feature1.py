@@ -5,12 +5,15 @@ import pandas as pd
 from pandas import Series, DataFrame
 import numpy as np
 from scipy.stats import mode
+from scipy import sparse
 import csv
 import matplotlib.dates
 import matplotlib.pyplot as plt
 from datetime import *
 import urllib, urllib.parse, urllib.request
 import json, random, re
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_selection import chi2, SelectPercentile
 
 from utils import *
 
@@ -88,12 +91,20 @@ def addMajorOsv(df, **params):
     print('major osv time:', datetime.now() - startTime)
     return df
 
-def addTagsPrefix(df, **params):
+def splitTagsList(df, **params):
     '''
-    分割用户标签及用户标签前缀
+    分割用户标签
     '''
     startTime = datetime.now()
     df['tags_list'] = df['user_tags'].dropna().map(lambda x:list(set(x.split(",")) - set([""])))
+    print('split tags time:', datetime.now() - startTime)
+    return df
+
+def addTagsPrefix(df, **params):
+    '''
+    添加用户标签前缀
+    '''
+    startTime = datetime.now()
     df['tags21'] = df['tags_list'].dropna().map(lambda x: [t for t in x if len(re.findall("^21", t))>0])
     df['tags21_len'] = df['tags21'].dropna().map(lambda x: len(x))
     df['tags30'] = df['tags_list'].dropna().map(lambda x: [t for t in x if len(re.findall("^30\d{5}$", t))>0])
@@ -107,6 +118,22 @@ def addTagsPrefix(df, **params):
     df['tagsMz'] = df['tags_list'].dropna().map(lambda x: [t for t in x if len(re.findall("^mz", t))>0])
     df['tagsMz_len'] = df['tagsMz'].dropna().map(lambda x: len(x))
     print('tags prefix time:', datetime.now() - startTime)
+    return df
+
+def addTagsMatrix(df, **params):
+    '''
+    将用户标签转换成稀疏矩阵
+    '''
+    startTime = datetime.now()
+    cv = CountVectorizer(min_df=0.001, max_df=0.8, binary=True)
+    cv.fit(df['user_tags'].dropna())
+    tagSelecter = SelectPercentile(chi2, percentile=10)
+    tagSelecter.fit(cv.transform(df[df.flag>=0]['user_tags'].fillna("")), df[df.flag>=0]['click'])
+    tagsMatrix = tagSelecter.transform(cv.transform(df['user_tags'].fillna("")))
+    tagsName = np.array(cv.get_feature_names())[tagSelecter.get_support()]
+    tempDf = pd.DataFrame(tagsMatrix.toarray(), columns=['tag_'+str(x) for x in tagsName], index=df.index)
+    df = pd.concat([df, tempDf], axis=1)
+    print('tag matrix time:', datetime.now() - startTime)
     return df
 
 def addPublishDay(df, **params):
@@ -127,6 +154,18 @@ def addAdvertShow(df, **params):
     tempDf = df.sort_values('time').groupby('advert_id').apply(lambda x: x[['advert_showed']].cumsum())
     df['advert_showed'] = tempDf['advert_showed']
     print('advert showed time:', datetime.now() - startTime)
+    return df
+
+def addAdidRatio(df, **params):
+    '''
+    广告的点击率
+    '''
+    tempDf = df.groupby(['day','adid'])['click'].agg([len,'sum'])
+    df = df.merge(tempDf[['len']].reset_index().rename(columns={'len':'ad_today_num'}), how='left', on=['day','adid'])
+    tempDf = tempDf.unstack('adid').drop([7]).fillna(0).cumsum().stack('adid').reset_index()
+    tempDf['ad_his_ctr'] = tempDf.groupby('day').apply(lambda x: biasSmooth(x['sum'],x['len'])).reset_index(level=0, drop=True)
+    tempDf['day'] += 1
+    df = df.merge(tempDf[['day','adid','ad_his_ctr']], how='left', on=['day','adid'])
     return df
 
 def addCreativeAreaRatio(df, **params):
@@ -167,21 +206,17 @@ def addSlotRatio(df, **params):
     df = df.merge(tempDf[['day','inner_slot_id','slot_his_ctr']], how='left', on=['day','inner_slot_id'])
     return df
 
-def addSlotDnfRatio(df, **params):
+def addCityRatio(df, **params):
     '''
-    广告位下的创意id点击率
+    城市的点击率
     '''
-    tempDf = df.groupby(['day','inner_slot_id','creative_tp_dnf'])['click'].agg([len,'sum'])
-    tempDf = tempDf.unstack(['inner_slot_id','creative_tp_dnf']).fillna(0).cumsum().stack(['inner_slot_id','creative_tp_dnf']).reset_index()
-    epsilon = 1 / tempDf['len'].max() ** 2
-    tempDf['slot_dnf_his_ctr'] = tempDf.groupby(['day','inner_slot_id']).apply(lambda x: biasSmooth(x['sum'], x['len'], epsilon=epsilon)).reset_index(level=[0,1], drop=True)
-    print(tempDf)
-    exit()
+    tempDf = df.groupby(['day','city'])['click'].agg([len,'sum'])
+    df = df.merge(tempDf[['len']].reset_index().rename(columns={'len':'city_today_num'}), how='left', on=['day','city'])
+    tempDf = tempDf.unstack('city').drop([7]).fillna(0).cumsum().stack('city').reset_index()
+    tempDf['city_his_ctr'] = tempDf.groupby('day').apply(lambda x: biasSmooth(x['sum'],x['len'])).reset_index(level=0, drop=True)
     tempDf['day'] += 1
-    df = df.merge(tempDf[['day','inner_slot_id','slot_his_ctr']], how='left', on=['day','inner_slot_id'])
-    exit()
-
-# 城市的点击率
+    df = df.merge(tempDf[['day','city','city_his_ctr']], how='left', on=['day','city'])
+    return df
 
 def feaFactory(df):
     startTime = datetime.now()
@@ -195,13 +230,27 @@ def feaFactory(df):
     df = addMajorOsv(df)
     df = addNntType(df)
     df = addAdvertShow(df)
+    df = addAdidRatio(df)
     df = addCreativeAreaRatio(df)
     df = addCreativeRatio(df)
     df = addSlotRatio(df)
-    # df = addSlotDnfRatio(df)
+    df = addCityRatio(df)
+    df = splitTagsList(df)
+    # df = addTagsMatrix(df)
     df = addTagsPrefix(df)
     print('feaFactory time:', datetime.now() - startTime)
     return df
+
+def userTagsMatrix(tagSeries):
+    '''
+    将用户标签转换成稀疏矩阵
+    '''
+    startTime = datetime.now()
+    cv = CountVectorizer(min_df=0.001, max_df=0.8, binary=True)
+    cv.fit(tagSeries.dropna())
+    tagCsr = cv.transform(tagSeries.fillna(""))
+    tagName = np.array(cv.get_feature_names())
+    return tagCsr, tagName
 
 if __name__ == '__main__':
     df = importDf("../data/round1_iflyad_train.txt")
@@ -211,3 +260,5 @@ if __name__ == '__main__':
     originDf = pd.concat([df,predictDf], ignore_index=True)
     originDf = feaFactory(originDf)
     exportResult(originDf, "../temp/fea1.csv")
+    tagCsr, tagName = userTagsMatrix(originDf['user_tags'])
+    sparse.save_npz("../temp/user_tags.npz", tagCsr)

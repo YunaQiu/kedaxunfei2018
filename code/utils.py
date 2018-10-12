@@ -105,11 +105,12 @@ def getOof(clf, trainX, trainY, testX, nFold=5, stratify=False, weight=None):
         kfTrainX = trainX[trainIdx]
         kfTrainY = trainY[trainIdx]
         kfTestX = trainX[testIdx]
+        kfTesty = trainY[testIdx]
         if weight != None:
             kfWeight = weight[trainIdx]
         else:
             kfWeight = None
-        clf.trainCV(kfTrainX, kfTrainY, verbose=False, weight=kfWeight)
+        clf.train(kfTrainX, kfTrainY, verbose=False, weight=kfWeight)
         oofTrain[testIdx] = clf.predict(kfTestX)
         oofTestSkf[:,i] = clf.predict(testX)
     oofTest[:] = oofTestSkf.mean(axis=1)

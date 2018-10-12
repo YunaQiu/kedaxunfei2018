@@ -18,7 +18,7 @@ from sklearn.model_selection import train_test_split, KFold, GridSearchCV, Strat
 from sklearn.externals import joblib
 
 from utils import *
-from feature2 import feaFactory, userTagsMatrix, addTime
+from feature2 import feaFactory, userTagsMatrix
 
 
 class LgbModel:
@@ -87,54 +87,101 @@ class LgbModel:
         exit()
 
 def main():
-    # 获取特征工程数据集
+    ORIGIN_DATA_PATH = "../data/"
     FEA_PATH = "../temp/fea2.csv"
     TAGS_PATH = "../temp/user_tags2.npz"
     TAGS_NAME_PATH = "../temp/user_tags_name2.txt"
+    SPARSE_COL_PATH = "../temp/lgb2_sparse_col.npz"
+    SPARSE_COLNAME_PATH = "../temp/lgb2_sparse_colname.txt"
+
+    # 获取特征工程数据集
     if not os.path.isfile(FEA_PATH):
-        df1 = importDf("../data/round1_iflyad_train.txt")
+        df1 = importDf(ORIGIN_DATA_PATH + "round1_iflyad_train.txt")
         df1['flag'] = 1
-        df2 = importDf("../data/round2_iflyad_train.txt")
+        df2 = importDf(ORIGIN_DATA_PATH + "round2_iflyad_train.txt")
         df2['flag'] = 2
-        df = pd.concat([df1, df2], ignore_index=True)
-        df.drop_duplicates(subset=['instance_id'], inplace=True)
-        predictDf = importDf("../data/round2_iflyad_test_feature.txt")
+        df1.drop(df1[df1.instance_id.isin(df2.instance_id)].index, inplace=True)
+        # df = pd.concat([df1, df2], ignore_index=True)
+        # df.drop_duplicates(subset=['instance_id'], inplace=True)
+        predictDf = importDf(ORIGIN_DATA_PATH + "round2_iflyad_test_feature.txt")
         predictDf['flag'] = -1
-        originDf = pd.concat([df,predictDf], ignore_index=True)
+        predictDf2 = importDf(ORIGIN_DATA_PATH + "round1_iflyad_test_feature.txt")
+        predictDf2.drop(predictDf2[predictDf2.instance_id.isin(predictDf.instance_id)].index, inplace=True)
+        predictDf2['flag'] = -2
+        originDf = pd.concat([df1, df2, predictDf, predictDf2], ignore_index=True)
         originDf = feaFactory(originDf)
-        originDf.index = list(range(len(originDf)))
         exportResult(originDf, FEA_PATH)
     else:
         originDf = pd.read_csv(FEA_PATH)
-        originDf = addTime(originDf)
-    if not os.path.isfile(TAGS_PATH):
-        tagsMatrix, tagsName = userTagsMatrix(originDf['user_tags'])
-        sparse.save_npz(TAGS_PATH, tagsMatrix)
-        fp = open(TAGS_NAME_PATH, "w")
-        fp.write(",".join(tagsName))
+    print("feature dataset prepare: finished!")
+
+
+    # 筛选稀疏特征
+    if not os.path.isfile(SPARSE_COL_PATH):
+        if not os.path.isfile(TAGS_PATH):
+            sparseCsr, sparseFea = userTagsMatrix(originDf['user_tags'])
+            sparse.save_npz(TAGS_PATH, sparseCsr)
+            fp = open(TAGS_NAME_PATH, "w")
+            fp.write(",".join(sparseFea))
+            fp.close()
+        else:
+            sparseCsr = sparse.load_npz(TAGS_PATH)
+            fp = open(TAGS_NAME_PATH)
+            sparseFea = None
+            try:
+                sparseFea = fp.read().split(",")
+            finally:
+                fp.close()
+        sparseFea = ["tag_%s"%x for x in sparseFea]
+        selecter = SelectPercentile(chi2, percentile=20)
+        selecter.fit(sparseCsr[originDf[originDf.flag>=0].index.tolist()], originDf[originDf.flag>=0]['click'])
+        sparseCsr = selecter.transform(sparseCsr)
+        sparseFea = np.array(sparseFea)[selecter.get_support()].tolist()
+        # tagsFea = tagsDf.columns[selecter.get_support()].tolist()
+        # originDf = pd.concat([originDf, tagsDf[tagsFea]], axis=1)
+        print("%d tags fea select: finished!" % len(sparseFea))
+
+        onehotList = ['creative_type','advert_industry_inner1','slot_prefix','region','carrier','nnt','devtype','os']
+        onehotDf = pd.get_dummies(originDf[onehotList], columns=onehotList, sparse=True)
+        sparseCsr = sparse.hstack([sparseCsr, sparse.csr_matrix(onehotDf)], 'csr')
+        # print(onehotDf.columns[:5])
+        sparseFea.extend(onehotDf.columns)
+        print("onehot fea:", len(onehotDf.columns))
+
+        selectList = ['adid','inner_slot_id','make','creative_id','app_id']
+        for x in selectList:
+            onehotDf = pd.get_dummies(originDf[[x]], columns=[x], sparse=True)
+            onehotCsr = sparse.csr_matrix(onehotDf)
+            selecter = SelectPercentile(percentile=5)
+            selecter.fit(onehotCsr[originDf[originDf.flag>=0].index.tolist()], originDf[originDf.flag>=0]['click'])
+            sparseCsr = sparse.hstack([sparseCsr, selecter.transform(onehotCsr)], 'csr')
+            sparseFea.extend(onehotDf.columns[selecter.get_support()])
+            # originDf = pd.concat([originDf, onehotDf[selecterFea]], axis=1)
+            # onehotFea.extend(selecterFea)
+            print('select %s onehot: %d' % (x, len(selecter.get_support(indices=True))))
+
+        sparse.save_npz(SPARSE_COL_PATH, sparseCsr)
+        fp = open(SPARSE_COLNAME_PATH, "w")
+        fp.write("||".join(sparseFea))
         fp.close()
     else:
-        tagsMatrix = sparse.load_npz(TAGS_PATH)
-        fp = open(TAGS_NAME_PATH)
+        sparseCsr = sparse.load_npz(SPARSE_COL_PATH)
+        fp = open(SPARSE_COLNAME_PATH)
+        sparseFea = np.array(list(range(sparseCsr.shape[1]))).astype(str).tolist()
         try:
-            tagsName = fp.read().split(",")
+            sparseFea = fp.read().split("||")
         finally:
             fp.close()
-    print("load feature dataset: finished!")
+    print("sparse dataset prepare: finished!")
 
-
-    # 筛选及处理特征
-    tagSelecter = SelectPercentile(chi2, percentile=20)
-    tagSelecter.fit(tagsMatrix[originDf[originDf.flag>=0].index.tolist()], originDf[originDf.flag>=0]['click'])
-    tagsMatrix = tagSelecter.transform(tagsMatrix)
-    tagsName = np.array(tagsName)[tagSelecter.get_support()]
+    # 全部特征拼接
     cateFea = [
         'adid','advert_id','orderid','advert_industry_inner','campaign_id','creative_id','creative_type','creative_tp_dnf',
         'app_cate_id','f_channel','app_id','inner_slot_id',
         'city','province','carrier','nnt','devtype','os','osv','make','model',
 
         'advert_industry_inner1','creative_dpi',
-        'slot_prefix',
+        'slot_prefix',#'slot2'
         'region',
         ]
     numFea = [
@@ -144,47 +191,37 @@ def main():
         'creative_area',#'creative_his_ctr',#'ad_his_ctr','creative_area_his_ctr',# 'advert_showed',#'ad_today_num','creative_area_today_num','creative_today_num',
         'app_tail_number',#'slot_his_ctr',# 'slot_today_num',
         'cityCode','osv1','ios_osv1','android_osv1','isDirectCity','nnt_gtype',#'city_his_ctr',#'city_today_num','is_wifi',
-        'tags_num','tags21_len','tags30_len','tagsLen10_len','tagsAg_len','tagsGd_len','tagsMz_len',
+        'tags_num','tags21_len','tags30_len','tagsLen10_len','tagsAg_len','tagsGd_len','tagsMz_len',#'tags21_mean','tags30_mean',
         # 'ad_today_num_ratio','dpi_today_num_ratio','creative_today_num_ratio','slot_today_num_ratio','app_today_num_ratio','city_today_num_ratio',
-        'ad_num_ratio','dpi_num_ratio','creative_num_ratio','slot_num_ratio','app_num_ratio','city_num_ratio',
-    ]
-    tagFea = ['tag_'+x for x in tagsName]
-    onehotList = ['creative_type','advert_industry_inner1','slot_prefix','region','carrier','nnt','devtype','os']
-    originDf = addOneHot(originDf, onehotList)
-    onehotFea = []
-    # for x in onehotList:
-    #     onehotFea.extend(["%s_%s"%(x,v) for v in originDf[x].dropna().unique()])
-    # startTime = datetime.now()
-    # print('start!!')
-    # onehotCsr = pd.get_dummies(originDf[['inner_slot_id']], columns=['inner_slot_id'], sparse=True)
-    # print('onehot:', startTime.now() - startTime)
-    # selecter = SelectPercentile(percentile=5)
-    # selecter.fit(onehotCsr[originDf.flag>=0], originDf[originDf.flag>=0]['click'])
-    # print('selecter:', startTime.now() - startTime)
-    # slotOnehotFea = onehotCsr.columns[selecter.get_support()].tolist()
-    # print(slotOnehotFea)
-    # # exit()
-    # originDf = pd.concat([originDf, onehotCsr[slotOnehotFea]], axis=1)
-    # onehotFea.extend(slotOnehotFea)
-
+        # 'ad_num_ratio_mean','dpi_num_ratio_mean','creative_num_ratio_mean','slot_num_ratio_mean','app_num_ratio_mean','city_num_ratio_mean',
+        ]
     originDf = labelEncoding(originDf, cateFea)
-    fea = cateFea + numFea + onehotFea
-    # print(originDf[cateFea+numFea].info())
-    print("feature prepare: finished!")
+    fea = cateFea + numFea
+    originX = sparse.hstack([sparse.csr_matrix(originDf[fea].astype(float)), sparseCsr], 'csr').astype('float32')
+    fea.extend(sparseFea)
+    print('model dataset size:', originX.shape)
+    print("model dataset prepare: finished!")
+
 
     # 划分数据集
-    originX = sparse.hstack([sparse.csr_matrix(originDf[fea].astype(float)), tagsMatrix], 'csr').astype('float32')
-    dfX = originX[originDf[originDf.flag>=0].index]
+    # dfX = originDf[originDf.flag>=0][fea]
+    # dfy = originDf[originDf.flag>=0]['click']
+    # trainX = originDf[(originDf.flag>=0)&(originDf.day<6)][fea]
+    # trainy = originDf[(originDf.flag>=0)&(originDf.day<6)]['click']
+    # validX = originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0)[fea]
+    # validy = originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0)['click']
+    # testX = originDf[originDf.flag==-1][fea]
+    dfX = originX[originDf[originDf.flag>=0].index.tolist()]
     dfy = originDf[originDf.flag>=0]['click']
-    trainX = originX[originDf[(originDf.flag>=0)&(originDf.day<6)].index]
+    trainX = originX[originDf[(originDf.flag>=0)&(originDf.day<6)].index.tolist()]
     trainy = originDf[(originDf.flag>=0)&(originDf.day<6)]['click']
-    validX = originX[originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0).index]
+    validX = originX[originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0).index.tolist()]
     validy = originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0)['click']
-    testX = originX[originDf[originDf.flag==-1].index]
-    print('dataset prepare: finished!')
+    testX = originX[originDf[originDf.flag==-1].index.tolist()]
+    print('training dataset prepare: finished!')
 
     # 训练模型
-    model = LgbModel(fea+tagFea)#, cateFea=onehotFea
+    model = LgbModel(fea)
     # model.gridSearch(trainX, trainy, validX, validy)
     model.cv(dfX, dfy, nfold=5)
     iterNum = model.train(trainX, trainy, validX=validX, validy=validy)
@@ -214,7 +251,7 @@ def main():
     print(predictDf[['instance_id','predicted_score']].describe())
     print(predictDf[['instance_id','predicted_score']].head())
     print(predictDf.groupby('hour')['predicted_score'].mean())
-    exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2_add_num.csv")
+    # exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2_add.csv")
 
 if __name__ == '__main__':
     startTime = datetime.now()

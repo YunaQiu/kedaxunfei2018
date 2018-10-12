@@ -91,6 +91,7 @@ def addSlotPrefix(df, **params):
     拆分广告位前缀
     '''
     df['slot_prefix'] = df['inner_slot_id'].map(lambda x: x.split('_')[0])
+    df['slot2'] = df['inner_slot_id'].map(lambda x: x.split('_')[1])
     return df
 
 def addNntType(df, **params):
@@ -142,6 +143,11 @@ def addTagsPrefix(df, **params):
     df['tagsMz'] = df['tags_list'].dropna().map(lambda x: [t for t in x if len(re.findall("^mz", t))>0])
     df['tagsMz_len'] = df['tagsMz'].dropna().map(lambda x: len(x))
     print('tags prefix time:', datetime.now() - startTime)
+    return df
+
+def addTagsMean(df, **params):
+    df['tags21_mean'] = df['tags21'].dropna().map(lambda x: np.array(x).astype(float).mean())
+    df['tags30_mean'] = df['tags30'].dropna().map(lambda x: np.array(x).astype(float).mean())
     return df
 
 def addTagsMatrix(df, **params):
@@ -210,6 +216,8 @@ def addAdidNum(df, **params):
     tempDf['day'] += 1
     df = df.merge(tempDf[['day','adid','ad_his_num_ratio']], how='left', on=['day','adid'])
     df = df.merge(tempDf[tempDf.day == tempDf.day.max()][['adid','ad_his_num_ratio']].rename(columns={'ad_his_num_ratio':'ad_num_ratio'}), how='left', on=['adid'])
+    tempDf = tempDf.groupby('adid')[['ad_today_num_ratio']].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'ad_today_num_ratio':'ad_num_ratio_mean'}), how='left', on=['adid'])
     return df
 
 def addCreativeAreaRatio(df, **params):
@@ -249,6 +257,8 @@ def addCreativeDpiNum(df, **params):
     tempDf['day'] += 1
     df = df.merge(tempDf[['day','creative_dpi','dpi_his_num_ratio']], how='left', on=['day','creative_dpi'])
     df = df.merge(tempDf[tempDf.day == tempDf.day.max()][['creative_dpi','dpi_his_num_ratio']].rename(columns={'dpi_his_num_ratio':'dpi_num_ratio'}), how='left', on=['creative_dpi'])
+    tempDf = tempDf.groupby('creative_dpi')[['dpi_today_num_ratio']].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'dpi_today_num_ratio':'dpi_num_ratio_mean'}), how='left', on=['creative_dpi'])
     return df
 
 def addCreativeRatio(df, **params):
@@ -286,6 +296,8 @@ def addCreativeNum(df, **params):
     tempDf['day'] += 1
     df = df.merge(tempDf[['day','creative_id','creative_his_num_ratio']], how='left', on=['day','creative_id'])
     df = df.merge(tempDf[tempDf.day == tempDf.day.max()][['creative_id','creative_his_num_ratio']].rename(columns={'creative_his_num_ratio':'creative_num_ratio'}), how='left', on=['creative_id'])
+    tempDf = tempDf.groupby('creative_id')[['creative_today_num_ratio']].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'creative_today_num_ratio':'creative_num_ratio_mean'}), how='left', on=['creative_id'])
     return df
 
 def addSlotRatio(df, **params):
@@ -323,6 +335,8 @@ def addSlotNum(df, **params):
     tempDf['day'] += 1
     df = df.merge(tempDf[['day','inner_slot_id','slot_his_num_ratio']], how='left', on=['day','inner_slot_id'])
     df = df.merge(tempDf[tempDf.day == tempDf.day.max()][['inner_slot_id','slot_his_num_ratio']].rename(columns={'slot_his_num_ratio':'slot_num_ratio'}), how='left', on=['inner_slot_id'])
+    tempDf = tempDf.groupby('inner_slot_id')[['slot_today_num_ratio']].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'slot_today_num_ratio':'slot_num_ratio_mean'}), how='left', on=['inner_slot_id'])
     return df
 
 def addAppNum(df, **params):
@@ -347,6 +361,8 @@ def addAppNum(df, **params):
     tempDf['day'] += 1
     df = df.merge(tempDf[['day','app_id','app_his_num_ratio']], how='left', on=['day','app_id'])
     df = df.merge(tempDf[tempDf.day == tempDf.day.max()][['app_id','app_his_num_ratio']].rename(columns={'app_his_num_ratio':'app_num_ratio'}), how='left', on=['app_id'])
+    tempDf = tempDf.groupby('app_id')[['app_today_num_ratio']].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'app_today_num_ratio':'app_num_ratio_mean'}), how='left', on=['app_id'])
     return df
 
 def addCityRatio(df, **params):
@@ -384,6 +400,8 @@ def addCityNum(df, **params):
     tempDf['day'] += 1
     df = df.merge(tempDf[['day','city','city_his_num_ratio']], how='left', on=['day','city'])
     df = df.merge(tempDf[tempDf.day == tempDf.day.max()][['city','city_his_num_ratio']].rename(columns={'city_his_num_ratio':'city_num_ratio'}), how='left', on=['city'])
+    tempDf = tempDf.groupby('city')[['city_today_num_ratio']].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'city_today_num_ratio':'city_num_ratio_mean'}), how='left', on=['city'])
     return df
 
 def feaFactory(df):
@@ -414,6 +432,8 @@ def feaFactory(df):
     df = splitTagsList(df)
     # df = addTagsMatrix(df)
     df = addTagsPrefix(df)
+    df = addTagsMean(df)
+    df.index = list(range(len(df)))
     print('feaFactory time:', datetime.now() - startTime)
     return df
 

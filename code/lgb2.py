@@ -30,10 +30,10 @@ class LgbModel:
             'learning_rate': 0.05,
         	'num_leaves': 150,
             'max_depth': -1,
-            'min_data_in_leaf': 80,
+            'min_data_in_leaf': 350,
             # 'feature_fraction': 0.9,
-            'bagging_fraction': 0.95,
-        	'bagging_freq': 1,
+            'bagging_fraction': 0.9,
+        	'bagging_freq': 3,
             'verbose': 0,
         }
         self.params.update(**params)
@@ -71,11 +71,12 @@ class LgbModel:
 
     def gridSearch(self, X, y, validX, validy, nFold=5, verbose=0):
         paramsGrids = {
-            'num_leaves': [10*i for i in range(5,30)],
-            # 'max_depth': list(range(3,8)),
-            'min_data_in_leaf': [20*i for i in range(1,10)],
-            'bagging_fraction': [1-0.05*i for i in range(0,5)],
-            'bagging_freq': list(range(0,10)),
+            # 'num_leaves': [20*i for i in range(7,15)],
+            # 'max_depth': list(range(8,13)),
+            'min_data_in_leaf': [50*i for i in range(2,10)],
+            # 'bagging_fraction': [1-0.05*i for i in range(0,5)],
+            # 'bagging_freq': list(range(0,10)),
+
         }
         def getEval(params):
             iter = self.train(X, y, validX=validX, validy=validy, params=params, verbose=verbose)
@@ -101,8 +102,6 @@ def main():
         df2 = importDf(ORIGIN_DATA_PATH + "round2_iflyad_train.txt")
         df2['flag'] = 2
         df1.drop(df1[df1.instance_id.isin(df2.instance_id)].index, inplace=True)
-        # df = pd.concat([df1, df2], ignore_index=True)
-        # df.drop_duplicates(subset=['instance_id'], inplace=True)
         predictDf = importDf(ORIGIN_DATA_PATH + "round2_iflyad_test_feature.txt")
         predictDf['flag'] = -1
         predictDf2 = importDf(ORIGIN_DATA_PATH + "round1_iflyad_test_feature.txt")
@@ -137,11 +136,9 @@ def main():
         selecter.fit(sparseCsr[originDf[originDf.flag>=0].index.tolist()], originDf[originDf.flag>=0]['click'])
         sparseCsr = selecter.transform(sparseCsr)
         sparseFea = np.array(sparseFea)[selecter.get_support()].tolist()
-        # tagsFea = tagsDf.columns[selecter.get_support()].tolist()
-        # originDf = pd.concat([originDf, tagsDf[tagsFea]], axis=1)
         print("%d tags fea select: finished!" % len(sparseFea))
 
-        onehotList = ['creative_type','advert_industry_inner1','slot_prefix','region','carrier','nnt','devtype','os']
+        onehotList = ['creative_type','creative_dpi','advert_industry_inner1','slot_prefix','region','carrier','nnt','devtype','os']
         onehotDf = pd.get_dummies(originDf[onehotList], columns=onehotList, sparse=True)
         sparseCsr = sparse.hstack([sparseCsr, sparse.csr_matrix(onehotDf)], 'csr')
         # print(onehotDf.columns[:5])
@@ -156,8 +153,6 @@ def main():
             selecter.fit(onehotCsr[originDf[originDf.flag>=0].index.tolist()], originDf[originDf.flag>=0]['click'])
             sparseCsr = sparse.hstack([sparseCsr, selecter.transform(onehotCsr)], 'csr')
             sparseFea.extend(onehotDf.columns[selecter.get_support()])
-            # originDf = pd.concat([originDf, onehotDf[selecterFea]], axis=1)
-            # onehotFea.extend(selecterFea)
             print('select %s onehot: %d' % (x, len(selecter.get_support(indices=True))))
 
         sparse.save_npz(SPARSE_COL_PATH, sparseCsr)
@@ -181,7 +176,7 @@ def main():
         'city','province','carrier','nnt','devtype','os','osv','make','model',
 
         'advert_industry_inner1','creative_dpi',
-        'slot_prefix',#'slot2'
+        'slot_prefix',#'slot2',
         'region',
         ]
     numFea = [
@@ -193,7 +188,7 @@ def main():
         'cityCode','osv1','ios_osv1','android_osv1','isDirectCity','nnt_gtype',#'city_his_ctr',#'city_today_num','is_wifi',
         'tags_num','tags21_len','tags30_len','tagsLen10_len','tagsAg_len','tagsGd_len','tagsMz_len',#'tags21_mean','tags30_mean',
         # 'ad_today_num_ratio','dpi_today_num_ratio','creative_today_num_ratio','slot_today_num_ratio','app_today_num_ratio','city_today_num_ratio',
-        # 'ad_num_ratio_mean','dpi_num_ratio_mean','creative_num_ratio_mean','slot_num_ratio_mean','app_num_ratio_mean','city_num_ratio_mean',
+        'ad_num_ratio','dpi_num_ratio','creative_num_ratio','slot_num_ratio','app_num_ratio','city_num_ratio','advert_num_ratio','industry_num_ratio','campaign_num_ratio','make_num_ratio','model_num_ratio',
         ]
     originDf = labelEncoding(originDf, cateFea)
     fea = cateFea + numFea
@@ -201,7 +196,6 @@ def main():
     fea.extend(sparseFea)
     print('model dataset size:', originX.shape)
     print("model dataset prepare: finished!")
-
 
     # 划分数据集
     # dfX = originDf[originDf.flag>=0][fea]
@@ -223,9 +217,9 @@ def main():
     # 训练模型
     model = LgbModel(fea)
     # model.gridSearch(trainX, trainy, validX, validy)
-    model.cv(dfX, dfy, nfold=5)
-    iterNum = model.train(trainX, trainy, validX=validX, validy=validy)
-    model.train(dfX, dfy, num_round=iterNum, verbose=False)
+    # model.cv(dfX, dfy, nfold=5)
+    iterNum = model.train(trainX, trainy, validX=validX, validy=validy, params={'learning_rate':0.02})
+    model.train(dfX, dfy, num_round=iterNum, params={'learning_rate':0.02}, verbose=False)
 
     # skf = StratifiedKFold(n_splits=5, random_state=0, shuffle=True)
     # # testy = np.zeros((validX.shape[0], skf.n_splits))
@@ -251,7 +245,7 @@ def main():
     print(predictDf[['instance_id','predicted_score']].describe())
     print(predictDf[['instance_id','predicted_score']].head())
     print(predictDf.groupby('hour')['predicted_score'].mean())
-    # exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2_add.csv")
+    exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2_num.csv")
 
 if __name__ == '__main__':
     startTime = datetime.now()

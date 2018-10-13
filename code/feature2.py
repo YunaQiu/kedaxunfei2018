@@ -48,6 +48,7 @@ def addFirstIndustry(df, **params):
     拆分行业一级和二级
     '''
     df['advert_industry_inner1'] = df['advert_industry_inner'].map(lambda x: x.split("_")[0])
+    df['advert_industry_inner2'] = df['advert_industry_inner'].map(lambda x: x.split("_")[1])
     return df
 
 def addCreativeArea(df, **params):
@@ -199,14 +200,36 @@ def addAdidRatio(df, **params):
     df = df.merge(tempDf[['day','adid','ad_his_ctr']], how='left', on=['day','adid'])
     return df
 
+def addColNum(df, colName, prefix, **params):
+    tempDf = pd.pivot_table(df, index=['day',colName], values=['click'], aggfunc=len, dropna=False, fill_value=0)
+    tempDf.loc[7:] *= 4
+    tempDf['click_addup'] = tempDf.unstack(colName).cumsum().stack(colName)
+    tempDf = tempDf.reset_index(level=colName)
+    daySeries = df.groupby('day')['instance_id'].count()
+    daySeries.loc[7] *= 4
+    tempDf['day_len'] = daySeries
+    tempDf['day_addup'] = daySeries.cumsum()
+    tempDf = tempDf.reset_index()
+    tempDf['%s_today_num_ratio'%prefix] = tempDf['click'] / tempDf['day_len']
+    df = df.merge(tempDf[['day',colName,'%s_today_num_ratio'%prefix]], how='left', on=['day',colName])
+    tempDf['%s_his_num_ratio'%prefix] = tempDf['click_addup'] / tempDf['day_addup']
+    tempDf['day'] += 1
+    df = df.merge(tempDf[['day',colName,'%s_his_num_ratio'%prefix]], how='left', on=['day',colName])
+    df = df.merge(tempDf[tempDf.day == tempDf.day.max()][[colName,'%s_his_num_ratio'%prefix]].rename(columns={'%s_his_num_ratio'%prefix:'%s_num_ratio'%prefix}), how='left', on=[colName])
+    tempDf = tempDf.groupby(colName)[['%s_today_num_ratio'%prefix]].mean().reset_index()
+    df = df.merge(tempDf.rename(columns={'%s_today_num_ratio'%prefix:'%s_num_ratio_mean'%prefix}), how='left', on=[colName])
+    return df
+
 def addAdidNum(df, **params):
     '''
     广告id当天出现的频率
     '''
     tempDf = pd.pivot_table(df, index=['day','adid'], values=['click'], aggfunc=len, dropna=False, fill_value=0)
+    tempDf.loc[7:] *= 4
     tempDf['click_addup'] = tempDf.unstack('adid').cumsum().stack('adid')
     tempDf = tempDf.reset_index(level='adid')
     daySeries = df.groupby('day')['instance_id'].count()
+    daySeries.loc[7] *= 4
     tempDf['day_len'] = daySeries
     tempDf['day_addup'] = daySeries.cumsum()
     tempDf = tempDf.reset_index()
@@ -404,6 +427,12 @@ def addCityNum(df, **params):
     df = df.merge(tempDf.rename(columns={'city_today_num_ratio':'city_num_ratio_mean'}), how='left', on=['city'])
     return df
 
+def addCrossColNum(df, col1, col2, alias, **params):
+    tempDf = pd.pivot_table(df, index=col1, values=col2, aggfunc='nunique')[[col2]]
+    tempDf = tempDf.rename(columns={col2:'%s_nunique'%alias}).reset_index()
+    df = df.merge(tempDf, how='left', on=[col1])
+    return df
+
 def feaFactory(df):
     startTime = datetime.now()
     df = formatDf(df)
@@ -423,12 +452,36 @@ def feaFactory(df):
     df = addCreativeRatio(df)
     df = addSlotRatio(df)
     df = addCityRatio(df)
-    df = addAdidNum(df)
-    df = addCreativeDpiNum(df)
-    df = addCreativeNum(df)
-    df = addSlotNum(df)
-    df = addAppNum(df)
-    df = addCityNum(df)
+    df = addCrossColNum(df, 'creative_id', 'adid', 'creative_ad')
+    colNumList = [
+        ["adid", "ad"],
+        ["creative_dpi", "dpi"],
+        ["creative_id", "creative"],
+        ["inner_slot_id", "slot"],
+        ["app_id", "app"],
+        ["city", "city"],
+        ["model", "model"],
+        ["make", "make"],
+        ['advert_id', 'advert'],
+        ['advert_industry_inner', 'industry'],
+        ['campaign_id', 'campaign'],
+    ]
+    for k,v in colNumList:
+        df = addColNum(df, k, v)
+    crossColList = [
+        ['creative_id', 'adid', 'creative_ad'],
+        ['adid', 'app_id', 'ad_app'],
+        ['adid', 'inner_slot_id', 'ad_slot'],
+        ['inner_slot_id', 'adid', 'slot_ad'],
+        ['inner_slot_id', 'creative_id', 'slot_creative'],
+        ['campaign_id', 'orderid', 'campaign_order'],
+        ['campaign_id', 'creative_id', 'campaign_creative'],
+        ['app_id','inner_slot_id','app_slot'],
+        ['model','creative_dpi', 'model_dpi'],
+        ['orderid','adid','order_ad'],
+    ]
+    for c1,c2,alias in crossColList:
+        df = addCrossColNum(df, c1, c2, alias)
     df = splitTagsList(df)
     # df = addTagsMatrix(df)
     df = addTagsPrefix(df)

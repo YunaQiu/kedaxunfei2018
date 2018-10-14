@@ -428,6 +428,9 @@ def addCityNum(df, **params):
     return df
 
 def addCrossColNum(df, col1, col2, alias, **params):
+    '''
+    增加交叉特征的独立个数
+    '''
     tempDf = pd.pivot_table(df, index=col1, values=col2, aggfunc='nunique')[[col2]]
     tempDf = tempDf.rename(columns={col2:'%s_nunique'%alias}).reset_index()
     df = df.merge(tempDf, how='left', on=[col1])
@@ -452,7 +455,6 @@ def feaFactory(df):
     df = addCreativeRatio(df)
     df = addSlotRatio(df)
     df = addCityRatio(df)
-    df = addCrossColNum(df, 'creative_id', 'adid', 'creative_ad')
     colNumList = [
         ["adid", "ad"],
         ["creative_dpi", "dpi"],

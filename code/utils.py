@@ -12,6 +12,7 @@ from datetime import *
 import urllib, urllib.parse, urllib.request
 import json, random
 from sklearn.preprocessing import *
+from sklearn.model_selection import train_test_split, KFold, GridSearchCV, StratifiedKFold
 
 
 # 导入数据
@@ -93,25 +94,28 @@ def exportResult(df, filePath, header=True, index=False, sep=','):
     df.to_csv(filePath, sep=sep, header=header, index=index)
 
 # 获取stacking下一层数据集
-def getOof(clf, trainX, trainY, testX, nFold=5, stratify=False, weight=None):
+def getOof(clf, trainX, trainY, testX, nFold=5, stratify=True, verbose=False, random_state=0, weight=None):
+    startTime = datetime.now()
     oofTrain = np.zeros(trainX.shape[0])
     oofTest = np.zeros(testX.shape[0])
     oofTestSkf = np.zeros((testX.shape[0], nFold))
     if stratify:
-        kf = StratifiedKFold(n_splits=nFold, shuffle=True)
+        kf = StratifiedKFold(n_splits=nFold, random_state=random_state, shuffle=True)
     else:
-        kf = KFold(n_splits=nFold, shuffle=True)
+        kf = KFold(n_splits=nFold, random_state=random_state, shuffle=True)
     for i, (trainIdx, testIdx) in enumerate(kf.split(trainX, trainY)):
         kfTrainX = trainX[trainIdx]
         kfTrainY = trainY[trainIdx]
         kfTestX = trainX[testIdx]
         kfTesty = trainY[testIdx]
-        if weight != None:
-            kfWeight = weight[trainIdx]
-        else:
-            kfWeight = None
-        clf.train(kfTrainX, kfTrainY, verbose=False, weight=kfWeight)
+        # if weight is not None:
+        #     kfWeight = weight[trainIdx]
+        # else:
+        #     kfWeight = None
+        clf.train(kfTrainX, kfTrainY, validX=kfTestX, validy=kfTesty, verbose=verbose)
         oofTrain[testIdx] = clf.predict(kfTestX)
         oofTestSkf[:,i] = clf.predict(testX)
+        print('oof cv %d of %d: finished!' % (i+1, nFold))
     oofTest[:] = oofTestSkf.mean(axis=1)
+    print('oof cost time:', datetime.now() - startTime)
     return oofTrain, oofTest

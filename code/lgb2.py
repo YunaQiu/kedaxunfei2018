@@ -35,6 +35,7 @@ class LgbModel:
             'bagging_fraction': 0.9,
         	'bagging_freq': 3,
             'verbose': 0,
+            'seed': 0,
         }
         self.params.update(**params)
         self.feaName = feaName
@@ -157,14 +158,14 @@ def main():
 
         sparse.save_npz(SPARSE_COL_PATH, sparseCsr)
         fp = open(SPARSE_COLNAME_PATH, "w")
-        fp.write("||".join(sparseFea))
+        fp.write("||".join(sparseFea).replace(" ","_"))
         fp.close()
     else:
         sparseCsr = sparse.load_npz(SPARSE_COL_PATH)
         fp = open(SPARSE_COLNAME_PATH)
         sparseFea = np.array(list(range(sparseCsr.shape[1]))).astype(str).tolist()
         try:
-            sparseFea = fp.read().split("||")
+            sparseFea = fp.read().replace(" ","_").split("||")
         finally:
             fp.close()
     print("sparse dataset prepare: finished!")
@@ -188,7 +189,8 @@ def main():
         'cityCode','osv1','ios_osv1','android_osv1','isDirectCity','nnt_gtype',#'city_his_ctr',#'city_today_num','is_wifi',
         'tags_num','tags21_len','tags30_len','tagsLen10_len','tagsAg_len','tagsGd_len','tagsMz_len',#'tags21_mean','tags30_mean',
         # 'ad_today_num_ratio','dpi_today_num_ratio','creative_today_num_ratio','slot_today_num_ratio','app_today_num_ratio','city_today_num_ratio',
-        'ad_num_ratio','dpi_num_ratio','creative_num_ratio','slot_num_ratio','app_num_ratio','city_num_ratio','advert_num_ratio','industry_num_ratio','campaign_num_ratio','make_num_ratio','model_num_ratio',
+        'ad_num_ratio','dpi_num_ratio','creative_num_ratio','slot_num_ratio','app_num_ratio','city_num_ratio','make_num_ratio','model_num_ratio',#'advert_num_ratio','industry_num_ratio','campaign_num_ratio',
+        'creative_ad_nunique_x','app_slot_nunique','model_dpi_nunique','order_ad_nunique','slot_ad_nunique','slot_creative_nunique','ad_app_nunique','ad_slot_nunique',#'campaign_order_nunique','campaign_creative_nunique',
         ]
     originDf = labelEncoding(originDf, cateFea)
     fea = cateFea + numFea
@@ -198,13 +200,6 @@ def main():
     print("model dataset prepare: finished!")
 
     # 划分数据集
-    # dfX = originDf[originDf.flag>=0][fea]
-    # dfy = originDf[originDf.flag>=0]['click']
-    # trainX = originDf[(originDf.flag>=0)&(originDf.day<6)][fea]
-    # trainy = originDf[(originDf.flag>=0)&(originDf.day<6)]['click']
-    # validX = originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0)[fea]
-    # validy = originDf[(originDf.flag>=0)&(originDf.day==6)].sample(frac=0.7, random_state=0)['click']
-    # testX = originDf[originDf.flag==-1][fea]
     dfX = originX[originDf[originDf.flag>=0].index.tolist()]
     dfy = originDf[originDf.flag>=0]['click']
     trainX = originX[originDf[(originDf.flag>=0)&(originDf.day<6)].index.tolist()]
@@ -216,28 +211,10 @@ def main():
 
     # 训练模型
     model = LgbModel(fea)
-    # model.gridSearch(trainX, trainy, validX, validy)
-    # model.cv(dfX, dfy, nfold=5)
+    model.gridSearch(trainX, trainy, validX, validy)
+    model.cv(dfX, dfy, nfold=5)
     iterNum = model.train(trainX, trainy, validX=validX, validy=validy, params={'learning_rate':0.02})
     model.train(dfX, dfy, num_round=iterNum, params={'learning_rate':0.02}, verbose=False)
-
-    # skf = StratifiedKFold(n_splits=5, random_state=0, shuffle=True)
-    # # testy = np.zeros((validX.shape[0], skf.n_splits))
-    # # for index, (trainIdx, testIdx) in enumerate(skf.split(trainX, trainy)):
-    # #     iterNum = model.train(trainX[trainIdx], trainy[trainIdx], validX=trainX[testIdx], validy=trainy[testIdx])
-    # #     testy[:, index] = model.predict(validX)
-    # # testy = testy.mean(axis=1)
-    # # print('valid loss:', metrics.log_loss(validy, testy))
-    # testy = np.zeros((testX.shape[0], skf.n_splits))
-    # best_score = []
-    # for index, (trainIdx, testIdx) in enumerate(skf.split(dfX, dfy)):
-    #     iterNum = model.train(dfX[trainIdx], dfy[trainIdx], validX=dfX[testIdx], validy=dfy[testIdx])
-    #     testy[:, index] = model.predict(testX)
-    #     best_score.append(metrics.log_loss(dfy[testIdx], model.predict(dfX[testIdx])))
-    # print('valid score:', best_score, np.mean(best_score))
-    # testy = testy.mean(axis=1)
-    model.feaScore()
-    # exit()
 
     # 预测结果
     predictDf = originDf[originDf.flag==-1][['instance_id','hour']]
@@ -245,7 +222,19 @@ def main():
     print(predictDf[['instance_id','predicted_score']].describe())
     print(predictDf[['instance_id','predicted_score']].head())
     print(predictDf.groupby('hour')['predicted_score'].mean())
-    exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2_num.csv")
+    exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2.csv")
+
+    # 5折stacking
+    print('training oof...')
+    df2 = originDf[originDf.flag>=0][['instance_id','hour','click']]
+    df2['predicted_score'], predictDf['predicted_score'] = getOof(model, dfX, dfy, testX)
+    print('cv5 valid loss:', metrics.log_loss(df2['click'], df2['predicted_score']))
+    print(predictDf[['instance_id','predicted_score']].describe())
+    print(predictDf[['instance_id','predicted_score']].head())
+    print(predictDf.groupby('hour')['predicted_score'].mean())
+    exportResult(df2[['instance_id','predicted_score']], "../result/lgb2_oof_train.csv")
+    exportResult(predictDf[['instance_id','predicted_score']], "../result/lgb2_oof_test.csv")
+
 
 if __name__ == '__main__':
     startTime = datetime.now()

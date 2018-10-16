@@ -25,12 +25,12 @@ class LgbModel:
     def __init__(self, feaName, cateFea=[], params={}):
         self.params = {
             'boosting_type': 'gbdt',
-            'objective': 'rmse',
+            # 'objective': 'rmse',
             'metric': 'custom',
-            'learning_rate': 0.05,
-        	'num_leaves': 80,
+            'learning_rate': 0.02,
+        	'num_leaves': 80,#150
             'max_depth': -1,
-            'min_data_in_leaf': 100,
+            'min_data_in_leaf': 100,#180
             # 'feature_fraction': 0.9,
             'bagging_fraction': 0.95,
         	'bagging_freq': 1,
@@ -41,20 +41,21 @@ class LgbModel:
         self.feaName = feaName
         self.cateFea = cateFea
 
-    def customObj(self, preds, train_data):
+    def customObj(self, preds, train_data, q=0.3):
         labels = train_data.get_label()
         clicks = (labels>0).astype(int)
-        predicts = clicks - labels + preds
-        # fx =  1.0 / (1.0 + np.exp(-predicts))
-        grad = -clicks/predicts + (1-clicks) / (1-predicts)
-        hess = clicks/np.square(predicts) + (1-clicks) / np.square(1-predicts)
+        ffms = clicks - labels
+        predicts = sigmod(sigmod(ffms,arc=True) + preds)
+        grad = predicts - clicks
+        hess = predicts * (1.0 - predicts)
         return grad, hess
 
     def customEval(self, preds, train_data):
         labels = train_data.get_label()
         clicks = (labels>0).astype(int)
-        predicts = addupDiff(clicks - labels, preds)
-        # predicts =  1.0 / (1.0 + np.exp(-predicts))
+        ffms = clicks - labels
+        predicts = addupDiff(ffms, preds)
+        # predicts =  addupDiff(ffms, preds)
         loss = metrics.log_loss(clicks, predicts)
         return "logloss", loss, False
 
@@ -64,9 +65,9 @@ class LgbModel:
         trainParam.update(params)
         if validX is not None:
             validData = trainData.create_valid(validX, label=validy)
-            bst = lgb.train(trainParam, trainData, num_boost_round=num_round, valid_sets=[trainData,validData], valid_names=['train', 'valid'], feval=self.customEval, early_stopping_rounds=early_stopping, verbose_eval=verbose)#
+            bst = lgb.train(trainParam, trainData, num_boost_round=num_round, valid_sets=[trainData,validData], valid_names=['train', 'valid'], fobj=self.customObj, feval=self.customEval, early_stopping_rounds=early_stopping, verbose_eval=verbose)
         else:
-            bst = lgb.train(trainParam, trainData, valid_sets=trainData, feval=self.customEval, num_boost_round=num_round, verbose_eval=verbose)#
+            bst = lgb.train(trainParam, trainData, valid_sets=trainData, fobj=self.customObj, feval=self.customEval, num_boost_round=num_round, verbose_eval=verbose)#
         self.bst = bst
         return bst.best_iteration
 
@@ -74,7 +75,7 @@ class LgbModel:
         trainParam = self.params
         trainParam.update(params)
         trainData = lgb.Dataset(X, label=y, feature_name=self.feaName, categorical_feature=self.cateFea)
-        result = lgb.cv(trainParam, trainData, feature_name=self.feaName, categorical_feature=self.cateFea, num_boost_round=num_round, nfold=nfold, feval=self.customEval, stratified=False, early_stopping_rounds=early_stopping, verbose_eval=verbose)
+        result = lgb.cv(trainParam, trainData, feature_name=self.feaName, categorical_feature=self.cateFea, num_boost_round=num_round, nfold=nfold, fobj=self.customObj, feval=self.customEval, stratified=False, early_stopping_rounds=early_stopping, verbose_eval=verbose)
         return result
 
     def predict(self, X):
@@ -105,13 +106,20 @@ class LgbModel:
             print(resultDf)
         exit()
 
+def sigmod(x, arc=False):
+    if arc:
+        return -np.log(1/x - 1)
+    else:
+        return 1.0 / (1.0 + np.exp(-x))
+
 def addupDiff(origins, diffs):
     '''
     根据原始预测值及预测差值返回最终预测值（修正至0-1间）
     '''
-    preds = origins + diffs
-    preds[preds<=0] = (origins[preds<=0]) / 2
-    preds[preds>=1] = (1 + origins[preds>=1]) / 2
+    # preds = origins + diffs
+    # preds[preds<=0] = (origins[preds<=0]) / 2
+    # preds[preds>=1] = (1 + origins[preds>=1]) / 2
+    preds = sigmod(sigmod(origins,arc=True) + diffs)
     return preds
 
 def main():
@@ -173,7 +181,7 @@ def main():
         'creative_ad_nunique','app_slot_nunique','model_dpi_nunique','order_ad_nunique','slot_ad_nunique','slot_creative_nunique','ad_app_nunique','ad_slot_nunique',#'campaign_order_nunique','campaign_creative_nunique',
         ]
     originDf = labelEncoding(originDf, cateFea)
-    fea = cateFea + numFea
+    fea = numFea + cateFea
     print("model dataset prepare: finished!")
 
     # 划分数据集
@@ -191,17 +199,17 @@ def main():
     model = LgbModel(fea)
     # model.gridSearch(trainX, trainy, validX, validy)
     model.cv(dfX, dfy, nfold=5)
-    iterNum = model.train(trainX, trainy, validX=validX, validy=validy, params={'learning_rate':0.02})
-    model.train(dfX, dfy, num_round=iterNum, verbose=False, params={'learning_rate':0.02})
+    iterNum = model.train(trainX, trainy, validX=validX, validy=validy)
+    model.train(dfX, dfy, num_round=iterNum, verbose=False)
     model.feaScore()
     # exit()
 
     # 预测结果
-    modelName = "ffm_lgb_rmse"
+    modelName = "ffm_lgb_fobj"
     predictDf = originDf[originDf.flag==-1][['instance_id','hour','ffm_predict']]
     predictDf['predict_diff'] = model.predict(testX)
     predictDf['predicted_score'] = predictDf['ffm_predict'] + predictDf['predict_diff']
-    print('invalid predict:\n:', predictDf[(predictDf.predicted_score>=1)|(predictDf.predicted_score<=0)])
+    # print('invalid predict:\n:', predictDf[(predictDf.predicted_score>=1)|(predictDf.predicted_score<=0)])
     predictDf['predicted_score'] = addupDiff(predictDf['ffm_predict'].values, predictDf['predict_diff'].values)
     print(predictDf[['instance_id','predicted_score']].describe())
     print(predictDf[['instance_id','predicted_score']].head())
@@ -213,9 +221,9 @@ def main():
     df2 = originDf[originDf.flag>=0][['instance_id','hour','click','ffm_predict']]
     df2['predict_diff'], predictDf['predict_diff'] = getOof(model, dfX, dfy, testX, stratify=False)
     df2['predicted_score'] = df2['ffm_predict'] + df2['predict_diff']
-    print('invalid predict:\n:', len(df2[(df2.predicted_score>=1)|(df2.predicted_score<=0)]))
+    # print('invalid predict:\n:', len(df2[(df2.predicted_score>=1)|(df2.predicted_score<=0)]))
     predictDf['predicted_score'] = predictDf['ffm_predict'] + predictDf['predict_diff']
-    print('invalid predict:\n:', predictDf[(predictDf.predicted_score>=1)|(predictDf.predicted_score<=0)])
+    # print('invalid predict:\n:', predictDf[(predictDf.predicted_score>=1)|(predictDf.predicted_score<=0)])
     print('cv5 valid loss:', metrics.log_loss(df2['click'], df2['predicted_score']))
     print(predictDf[['instance_id','predicted_score']].describe())
     print(predictDf[['instance_id','predicted_score']].head())

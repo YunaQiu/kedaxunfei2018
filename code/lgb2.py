@@ -72,9 +72,9 @@ class LgbModel:
 
     def gridSearch(self, X, y, validX, validy, nFold=5, verbose=0):
         paramsGrids = {
-            # 'num_leaves': [20*i for i in range(7,15)],
+            'num_leaves': [20*i for i in range(2,10)],
             # 'max_depth': list(range(8,13)),
-            'min_data_in_leaf': [50*i for i in range(2,10)],
+            # 'min_data_in_leaf': [50*i for i in range(2,10)],
             # 'bagging_fraction': [1-0.05*i for i in range(0,5)],
             # 'bagging_freq': list(range(0,10)),
 
@@ -190,7 +190,7 @@ def main():
         'tags_num','tags21_len','tags30_len','tagsLen10_len','tagsAg_len','tagsGd_len','tagsMz_len',#'tags21_mean','tags30_mean',
         # 'ad_today_num_ratio','dpi_today_num_ratio','creative_today_num_ratio','slot_today_num_ratio','app_today_num_ratio','city_today_num_ratio',
         'ad_num_ratio','dpi_num_ratio','creative_num_ratio','slot_num_ratio','app_num_ratio','city_num_ratio','make_num_ratio','model_num_ratio',#'advert_num_ratio','industry_num_ratio','campaign_num_ratio',
-        'creative_ad_nunique_x','app_slot_nunique','model_dpi_nunique','order_ad_nunique','slot_ad_nunique','slot_creative_nunique','ad_app_nunique','ad_slot_nunique',#'campaign_order_nunique','campaign_creative_nunique',
+        'creative_ad_nunique','app_slot_nunique','model_dpi_nunique','order_ad_nunique','slot_ad_nunique','slot_creative_nunique','ad_app_nunique','ad_slot_nunique',#'campaign_order_nunique','campaign_creative_nunique',
         ]
     originDf = labelEncoding(originDf, cateFea)
     fea = cateFea + numFea
@@ -215,6 +215,7 @@ def main():
     model.cv(dfX, dfy, nfold=5)
     iterNum = model.train(trainX, trainy, validX=validX, validy=validy, params={'learning_rate':0.02})
     model.train(dfX, dfy, num_round=iterNum, params={'learning_rate':0.02}, verbose=False)
+    model.feaScore()
 
     # 预测结果
     predictDf = originDf[originDf.flag==-1][['instance_id','hour']]
